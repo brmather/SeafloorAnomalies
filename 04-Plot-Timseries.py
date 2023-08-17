@@ -23,11 +23,12 @@ from skimage import feature
 
 agegrid_dir = "/Users/ben/Dropbox/USyd/GPlates/"
 agegrid_filename = agegrid_dir+"slab_dip/Clennet_AgeGrids_0.1d_masked/seafloor_age_mask_{:.1f}Ma.nc"
+LIP_filename = "/Users/ben/Dropbox/USyd/GPlates/SampleData/FeatureCollections/LargeIgneousProvinces_VolcanicProvinces/Johansson_etal_2018_VolcanicProvinces/Johansson_etal_2018_VolcanicProvinces_v2.gpmlz"
 
 reconstruction_times = np.arange(0,171)
 
 # Call GPlately's DataServer from the download.py module
-gdownload = gplately.download.DataServer("Merdith2021")
+gdownload = gplately.download.DataServer("Clennett2020")
 
 
 
@@ -44,8 +45,7 @@ model = gplately.PlateReconstruction(rotation_model, topology_features, static_p
 coastlines, continents, COBs = gdownload.get_topology_geometries()
 
 # Call the PlotTopologies object
-time = 0 #Ma
-gplot = gplately.plot.PlotTopologies(model, time, coastlines, continents, COBs)
+gplot = gplately.plot.PlotTopologies(model, coastlines, continents, COBs)
 
 
 
@@ -83,9 +83,8 @@ for i, sheet in enumerate(sheets):
 
 # In[17]:
 
-
-def grad(raster, tol_grad=2, iter_dilation=2, mask=True):
-    image = raster.fill_NaNs()
+def grad(raster, tol_grad=2, iter_dilation=0, mask=True, return_gradient=False):
+    image = raster.fill_NaNs(return_array=True)
     gradX, gradY = np.gradient(image)
     gradXY = np.hypot(gradX, gradY)
     
@@ -93,48 +92,66 @@ def grad(raster, tol_grad=2, iter_dilation=2, mask=True):
 
     fz_grid = np.zeros(mask_fz.shape)
     fz_grid[mask_fz] = 1
-    
+
     if iter_dilation:
         fz_grid = ndimage.binary_dilation(fz_grid, iterations=iter_dilation)
     
     if mask:
         fz_grid[raster.data.mask] = np.nan
         
-    fz_raster = gplately.Raster(array=fz_grid, extent='global')    
+    fz_raster = gplately.Raster(data=fz_grid, extent='global')    
     
-    return fz_raster
+    if return_gradient:
+        return fz_raster, gradXY
+    else:
+        return fz_raster
 
 
-# In[22]:
-
-
-def plot_fz_timseries(time):
-    ## Lifted from Notebook 2
-    subduction_data = model.tesselate_subduction_zones(time, np.deg2rad(0.2), ignore_warnings=True)
+def reconstruct_fracture_zones(time, return_grid=False):
+    subduction_data = model.tessellate_subduction_zones(time, np.deg2rad(0.2), ignore_warnings=True)
     trench_lons = subduction_data[:,0]
     trench_lats = subduction_data[:,1]
     trench_norm = subduction_data[:,7]
+
+    # store these for later
+    subduction_lons = trench_lons.copy()
+    subduction_lats = trench_lats.copy()
     
-    dlon = -1*np.sin(np.radians(trench_norm))
-    dlat = -1*np.cos(np.radians(trench_norm))
+    dlon = -2.5*np.sin(np.radians(trench_norm))
+    dlat = -2.5*np.cos(np.radians(trench_norm))
     
     trench_lons += dlon
     trench_lats += dlat
-
-
+    
     agegrid_raster = gplately.Raster(filename=agegrid_filename.format(time))
-    fz_raster = grad(agegrid_raster, tol_grad=2, iter_dilation=2, mask=False)
+    fz_raster, gradXY = grad(agegrid_raster, tol_grad=2, iter_dilation=0, mask=False, return_gradient=True)
+    mask_raster = fz_raster.data >= 1
+    fz_raster.data[mask_raster] = gradXY[mask_raster]
     
     trench_fz = fz_raster.interpolate(trench_lons, trench_lats, method='nearest')
     
     # mask points where fracture zone intersects a subduction zone
     mask_trench_fz = trench_fz > 0
-    fz_lons = trench_lons[mask_trench_fz]
-    fz_lats = trench_lats[mask_trench_fz]
+    trench_fz   = trench_fz[mask_trench_fz]
+    trench_lons = subduction_lons[mask_trench_fz]
+    trench_lats = subduction_lats[mask_trench_fz]
+    
+    if return_grid:
+        return trench_lons, trench_lats, trench_fz, fz_raster.data
+    else:
+        return trench_lons, trench_lats, trench_fz
+
+# In[22]:
+
+
+def plot_fz_timseries(time):
+    fz_lons, fz_lats, fz_mag, fz_raster = reconstruct_fracture_zones(time, return_grid=True)
+
+    LIP_features = model.reconstruct(LIP_filename, time)
     
     # set up map plot
-    fig = plt.figure(figsize=(16,7.5))
-    ax = fig.add_subplot(111, projection=ccrs.Mollweide(central_longitude = 160))
+    fig = plt.figure(figsize=(7.5,7.5))
+    ax = fig.add_subplot(111, projection=ccrs.Orthographic(70, 0))
     ax.set_global()
     ax.gridlines(color='0.7', linestyle=':', xlocs=np.arange(-180,180,30), ylocs=np.arange(-90,90,30))
 
@@ -142,10 +159,11 @@ def plot_fz_timseries(time):
     # Plot shapefile features, subduction zones and MOR boundaries at 50 Ma
     gplot.time = time # Ma
     # gplot.plot_continent_ocean_boundaries(ax, color='b', alpha=0.05)
-    gplot.plot_grid(ax, fz_raster.data, origin='lower', cmap='RdPu', vmin=0, vmax=1)
+    gplot.plot_grid(ax, fz_raster, origin='lower', cmap='RdPu', vmin=0, vmax=2)
     gplot.plot_continents(ax, facecolor='0.8')
     gplot.plot_coastlines(ax, color='0.5')
     gplot.plot_ridges_and_transforms(ax, color='red', zorder=9)
+    gplot.plot_feature(ax, LIP_features, color='DarkRed', alpha=0.25, zorder=9)
 
     ax.scatter(fz_lons, fz_lats, c='yellow', transform=ccrs.PlateCarree())
 
@@ -173,13 +191,13 @@ def plot_fz_timseries(time):
         
         if mask_ages.any():
             # reconstruct
-            rlons, rlats = gpts.reconstruct(time)
+            rlons, rlats = gpts.reconstruct(time, return_array=True)
             
             # print(len(size), np.count_nonzero(mask_ages), df.shape)
 
             sc = ax.scatter(rlons[mask_ages], rlats[mask_ages], s=10+size[mask_ages]*2, 
                             marker=symbols[i], cmap='YlGnBu',
-                            vmin=0, vmax=reconstruction_times.max(),
+                            color='C{}'.format(i),
                             label=label, transform=ccrs.PlateCarree(),
                             edgecolor='k', linewidth=0.5, zorder=11)
             
