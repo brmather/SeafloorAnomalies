@@ -28,7 +28,7 @@ agegrid_dir = "/Users/ben/Dropbox/USyd/GPlates/"
 agegrid_filename = agegrid_dir+"slab_dip/Clennet_AgeGrids_0.1d_masked/seafloor_age_mask_{:.1f}Ma.nc"
 LIP_filename = "/Users/ben/Dropbox/USyd/GPlates/SampleData/FeatureCollections/LargeIgneousProvinces_VolcanicProvinces/Johansson_etal_2018_VolcanicProvinces/Johansson_etal_2018_VolcanicProvinces_v2.gpmlz"
 
-reconstruction_times = np.arange(0,171)
+reconstruction_times = np.arange(0,101,1)
 extent_global = [-180,180,-90,90]
 
 # Call GPlately's DataServer from the download.py module
@@ -56,42 +56,23 @@ gplot = gplately.plot.PlotTopologies(model, coastlines, continents, COBs)
 # In[5]:
 
 
-metal_dict = dict()
-
 commodities = ['Cu (Mt)', 'Pb (Mt)', 'Zn (Mt)', 'Ni (Mt)']
 sheets = ['PbZn-CD', 'PbZn-MVT', 'Cu-sed', 'Magmatic Ni', 'VMS', 'Cu-por', 'IOCG']
-
-for sheet in sheets:
-    df = pd.read_excel('data/base_metal_deposit_compilation.xls', sheet_name=sheet, na_values='ND')
-    df = df[df['Age (Ga)'].notna()]
-    df = df[df['Age (Ga)']*1000 <= reconstruction_times.max()]
-
-    if df.shape[0] > 0:
-        metal_dict[sheet] = df
-    else:
-        sheets.remove(sheet)
-        
 symbols = ['o', 'v', 's', '*', 'd', '^', 'P']*2
 
 
-df_por = metal_dict['Cu-por']
-
-# In[6]:
-
-
-pts_dict = dict()
-
-for i, sheet in enumerate(sheets):
-    df = metal_dict[sheet]
-
-    pts_dict[sheet] = gplately.Points(model, df['Lon'], df['Lat'])
+df_por = pd.read_excel('data/base_metal_deposit_compilation.xls', sheet_name='Cu-por', na_values='ND')
+df_por = df_por[df_por['Age (Ga)'].notna()]
+df_por = df_por[df_por['Age (Ga)']*1000 <= reconstruction_times.max()]
 
 
-pts_por = pts_dict['Cu-por']
+pts_por = gplately.Points(model, df_por['Lon'], df_por['Lat'])
 
 
-seamounts_filename = "data/Pacific_synthetic_seamounts.gpml"
-seamounts = pygplates.FeatureCollection(seamounts_filename)
+seamounts_pacific_filename = "data/Pacific_synthetic_seamounts.gpml"
+seamounts_indian_filename = "data/Indian_synthetic_seamounts.gpml"
+seamounts = pygplates.FeatureCollection(seamounts_pacific_filename)
+seamounts.add(pygplates.FeatureCollection(seamounts_indian_filename))
 
 LIP_conjugates_filename = "data/LIP_conjugates/LIP_conjugates_0Ma.shp"
 LIPs_filename = "data/Whittaker_etal_2015_LIPs.gpmlz"
@@ -169,7 +150,10 @@ def reconstruct_seamount_subduction(time, dtol=50, return_seamounts=False, subdu
     trench_norm = subduction_data[:,7]
     
     # reconstruct seamount and extract points on sphere
-    reconstructed_seamounts = model.reconstruct(seamounts_filename, time)
+    seamounts = pygplates.FeatureCollection(seamounts_pacific_filename)
+    seamounts.add(pygplates.FeatureCollection(seamounts_indian_filename))
+
+    reconstructed_seamounts = model.reconstruct(seamounts, time)
     seamount_lons = np.zeros(len(reconstructed_seamounts))
     seamount_lats = np.zeros(len(reconstructed_seamounts))
     for i, seamount in enumerate(reconstructed_seamounts):
@@ -244,10 +228,9 @@ def plot_timseries(time):
 
     
     # set up map plot
-    fig = plt.figure(figsize=(12,6))
+    fig = plt.figure(figsize=(5,4))
     ax = fig.add_subplot(111, projection=ccrs.Mollweide(central_longitude=180))
     ax.set_global()
-    ax.imshow([[0,0],[0,0]], extent=[-180,180,-180,180], cmap='Greys', vmin=0, vmax=1, transform=gplot.base_projection)
     ax.gridlines(color='0.7', linestyle=':', xlocs=np.arange(-180,180,30), ylocs=np.arange(-90,90,30))
 
 
@@ -266,23 +249,23 @@ def plot_timseries(time):
     if len(LIP_conj_ft):
         gplot.plot_feature(ax, LIP_conj_ft, color='IndianRed', zorder=6)
     if len(sm_lons):
-        ax.scatter(sm_lons, sm_lats, c='RoyalBlue', marker='.', s=3, transform=gplot.base_projection, zorder=6)
+        ax.scatter(sm_lons, sm_lats, c='RoyalBlue', marker='.', s=1, transform=gplot.base_projection, zorder=6)
 
     # ax.add_feature(cfeature.LAND, zorder=5)
     gplot.plot_coastlines(ax, color='#EEEDD5', zorder=5)
     gplot.plot_all_topologies(ax, zorder=4, linewidth=0.5)
-    gplot.plot_trenches(ax, zorder=8)
+    gplot.plot_trenches(ax, linewidth=0.75, zorder=8)
     gplot.plot_subduction_teeth(ax, zorder=8)
-    gplot.plot_ridges(ax, color='r', zorder=8)
+    gplot.plot_ridges(ax, linewidth=0.75, color='r', zorder=8)
 
-    ax.scatter(fz_lons, fz_lats,   c='MediumPurple', transform=gplot.base_projection, zorder=7)
-    ax.scatter(LIP_lons, LIP_lats, c='Tomato', transform=gplot.base_projection, zorder=7)
-    ax.scatter(sz_lons, sz_lats,   c='SkyBlue', transform=gplot.base_projection, zorder=7)
+    ax.scatter(fz_lons, fz_lats,   s=10, c='MediumPurple', transform=gplot.base_projection, zorder=7)
+    ax.scatter(LIP_lons, LIP_lats, s=10, c='Tomato', transform=gplot.base_projection, zorder=7)
+    ax.scatter(sz_lons, sz_lats,   s=10, c='SkyBlue', transform=gplot.base_projection, zorder=7)
 
     # plot Cu-por
     por_lon, por_lat = pts_por.reconstruct(time, return_array=True)
     size = df_por['Cu (Mt)'].fillna(0).to_numpy()
-    mask_times = np.nonzero(np.logical_and(df_por['Age (Ga)']*1000 >= time, df_por['Age (Ga)']*1000 < time + 10))[0]
+    mask_times = np.nonzero(np.logical_and(df_por['Age (Ga)']*1000 >= time, df_por['Age (Ga)']*1000 < time + 25))[0]
     order = df_por['Age (Ga)'].iloc[mask_times].argsort()
     mask_times = mask_times[order]
 
@@ -305,27 +288,13 @@ def plot_timseries(time):
     # fig.legend(handles=legend_elements, loc='center', frameon=False, bbox_to_anchor=(0.5,0), ncol=2,
     #            title='Mineral deposit types', title_fontsize=12)
 
-    fig.text(0.16, 0.8, "{:4d} Ma".format(time), fontsize=14, color='k')
+    # fig.text(0.17, 0.8, "{:4d} Ma".format(time), fontsize=10)
     
-    # ax.background_patch.set_fill(False)
-    # ax.outline_patch.set_visible(False)
-    # ax.background_patch.set_alpha(0)
-
-    fig.savefig("snapshots/fz_metals_{:04d}Ma.png".format(time), dpi=300, bbox_inches='tight', transparent=True)
+    fig.savefig("figures/fz_metals_{:04d}Ma.pdf".format(time), dpi=300, bbox_inches='tight')
     plt.close(fig)
     return None
 
 
-# plot_timseries(0)
+for time in range(0,125,25):
+    plot_timseries(time)
 
-
-from joblib import Parallel, delayed
-
-if __name__ == "__main__":
-    _ = Parallel(n_jobs=-3, backend='multiprocessing', verbose=1)(delayed(plot_timseries) (time,) for time in reconstruction_times)
-
-# Create a video using this command:
-# 
-# ```sh
-# cat $(ls -r snapshots/fz_metals_*) | ffmpeg -y -f image2pipe -r 8 -i - -c:v h264_videotoolbox -q:v 50 fz_sm_LIP_metals_clennett2020.mp4
-# ```
