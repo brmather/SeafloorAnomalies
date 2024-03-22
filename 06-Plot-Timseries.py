@@ -8,8 +8,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import gplately
+from gplately import pygplates
 import pandas as pd
 from scipy import ndimage
+from scipy.spatial import cKDTree
 from matplotlib.lines import Line2D
 from skimage import feature
 
@@ -81,6 +83,16 @@ for i, sheet in enumerate(sheets):
     pts_dict[sheet] = gplately.Points(model, df['Lon'], df['Lat'])
 
 
+
+seamounts_filename = "data/Pacific_synthetic_seamounts.gpml"
+seamounts = pygplates.FeatureCollection(seamounts_filename)
+
+LIP_conjugates_filename = "data/LIP_conjugates/LIP_conjugates_0Ma.shp"
+LIPs_filename = "data/Whittaker_etal_2015_LIPs.gpmlz"
+LIPs = pygplates.FeatureCollection(LIP_conjugates_filename)
+LIPs.add(pygplates.FeatureCollection(LIPs_filename))
+
+
 # In[17]:
 
 def grad(raster, tol_grad=2, iter_dilation=0, mask=True, return_gradient=False):
@@ -107,8 +119,10 @@ def grad(raster, tol_grad=2, iter_dilation=0, mask=True, return_gradient=False):
         return fz_raster
 
 
-def reconstruct_fracture_zones(time, return_grid=False):
-    subduction_data = model.tessellate_subduction_zones(time, np.deg2rad(0.2), ignore_warnings=True)
+def reconstruct_fracture_zones(time, return_grid=False, subduction_data=None):
+    if subduction_data is None:
+        subduction_data = model.tessellate_subduction_zones(time, np.deg2rad(0.2), ignore_warnings=True)
+    subduction_data = subduction_data.copy()
     trench_lons = subduction_data[:,0]
     trench_lats = subduction_data[:,1]
     trench_norm = subduction_data[:,7]
@@ -141,17 +155,91 @@ def reconstruct_fracture_zones(time, return_grid=False):
     else:
         return trench_lons, trench_lats, trench_fz
 
-# In[22]:
+def reconstruct_seamount_subduction(time, dtol=50, return_seamounts=False, subduction_data=None):
+    if subduction_data is None:
+        subduction_data = model.tessellate_subduction_zones(time, np.deg2rad(0.2), ignore_warnings=True)
+    trench_lons = subduction_data[:,0]
+    trench_lats = subduction_data[:,1]
+    trench_norm = subduction_data[:,7]
+    
+    # reconstruct seamount and extract points on sphere
+    reconstructed_seamounts = model.reconstruct(seamounts_filename, time)
+    seamount_lons = np.zeros(len(reconstructed_seamounts))
+    seamount_lats = np.zeros(len(reconstructed_seamounts))
+    for i, seamount in enumerate(reconstructed_seamounts):
+        seamount_lats[i], seamount_lons[i] = seamount.get_reconstructed_geometry().to_lat_lon()
+    
+    # find the nearest trench segment for each seamount
+    xt, yt, zt = gplately.tools.lonlat2xyz(trench_lons, trench_lats)
+    xs, ys, zs = gplately.tools.lonlat2xyz(seamount_lons, seamount_lats)
+    tree_seamount = cKDTree(np.c_[xs,ys,zs])
+    dist_to_seamount, idx_seamount = tree_seamount.query(np.c_[xt, yt, zt])
+    dist_to_seamount *= gplately.EARTH_RADIUS
+    
+    # filter trench segments within dtol of each seamount
+    mask_trench_seamount = dist_to_seamount <= dtol
+    sz_lons = trench_lons[mask_trench_seamount]
+    sz_lats = trench_lats[mask_trench_seamount]
+    
+    if return_seamounts:
+        return seamount_lons, seamount_lats, sz_lons, sz_lats
+    else:
+        return sz_lons, sz_lats
 
 
-def plot_fz_timseries(time):
-    fz_lons, fz_lats, fz_mag, fz_raster = reconstruct_fracture_zones(time, return_grid=True)
+def reconstruct_LIP_subduction(time, dtol=50, return_LIPs=False, subduction_data=None):
+    if subduction_data is None:
+        subduction_data = model.tessellate_subduction_zones(time, np.deg2rad(0.2), ignore_warnings=True)
+    trench_lons = subduction_data[:,0]
+    trench_lats = subduction_data[:,1]
+    
+    # reconstruct seamount and extract points on sphere
+    LIPs = pygplates.FeatureCollection(LIP_conjugates_filename)
+    LIPs.add(pygplates.FeatureCollection(LIPs_filename))
+    reconstructed_LIPs = model.reconstruct(LIPs, time)
+    
 
-    LIP_features = model.reconstruct(LIP_filename, time)
+    # find the nearest trench segment for each LIP
+    xt, yt, zt = gplately.tools.lonlat2xyz(trench_lons, trench_lats)
+    tree_trench = cKDTree(np.c_[xt,yt,zt])
+    
+    trench_LIP_lons = []
+    trench_LIP_lats = []
+    
+    for LIP in reconstructed_LIPs:
+        LIP_coords = LIP.get_reconstructed_geometry().get_points().to_lat_lon_array()
+        LIP_lons = LIP_coords[:,1]
+        LIP_lats = LIP_coords[:,0]
+        xl, yl, zl = gplately.tools.lonlat2xyz(LIP_lons, LIP_lats)
+        
+        dist_to_LIP, idx_LIP = tree_trench.query(np.c_[xl, yl, zl])
+        dist_to_LIP *= gplately.EARTH_RADIUS
+        mask_trench_LIP = dist_to_LIP <= dtol
+
+        trench_LIP_lons.extend(trench_lons[idx_LIP[mask_trench_LIP]])
+        trench_LIP_lats.extend(trench_lats[idx_LIP[mask_trench_LIP]])
+    
+    if return_LIPs:
+        return reconstructed_LIPs, np.array(trench_LIP_lons), np.array(trench_LIP_lats)
+    else:
+        return np.array(trench_LIP_lons), np.array(trench_LIP_lats)
+
+
+def plot_timseries(time):
+    subduction_data = model.tessellate_subduction_zones(time, np.deg2rad(0.2), ignore_warnings=True)
+
+    # fracture zones
+    sm_lons, sm_lats, sz_lons, sz_lats  = reconstruct_seamount_subduction(time, return_seamounts=True, subduction_data=subduction_data)
+    LIP_features, LIP_lons, LIP_lats    = reconstruct_LIP_subduction(time, return_LIPs=True, subduction_data=subduction_data)
+    fz_lons, fz_lats, fz_mag, fz_raster = reconstruct_fracture_zones(time, return_grid=True, subduction_data=subduction_data)
+
+    LIP_ft = model.reconstruct(pygplates.FeatureCollection(LIPs_filename), time)
+    LIP_conj_ft = model.reconstruct(pygplates.FeatureCollection(LIP_conjugates_filename), time)
+
     
     # set up map plot
-    fig = plt.figure(figsize=(7.5,7.5))
-    ax = fig.add_subplot(111, projection=ccrs.Orthographic(70, 0))
+    fig = plt.figure(figsize=(12,6))
+    ax = fig.add_subplot(111, projection=ccrs.Mollweide(central_longitude=160))
     ax.set_global()
     ax.gridlines(color='0.7', linestyle=':', xlocs=np.arange(-180,180,30), ylocs=np.arange(-90,90,30))
 
@@ -163,9 +251,17 @@ def plot_fz_timseries(time):
     gplot.plot_continents(ax, facecolor='0.8')
     gplot.plot_coastlines(ax, color='0.5')
     gplot.plot_ridges_and_transforms(ax, color='red', zorder=9)
-    gplot.plot_feature(ax, LIP_features, color='DarkRed', alpha=0.25, zorder=9)
 
-    ax.scatter(fz_lons, fz_lats, c='yellow', transform=ccrs.PlateCarree())
+    if len(LIP_ft):
+        gplot.plot_feature(ax, LIP_ft, color='Maroon', alpha=0.5, zorder=9)
+    if len(LIP_conj_ft):
+        gplot.plot_feature(ax, LIP_conj_ft, color='Indigo', alpha=0.5, zorder=9)
+    if len(sm_lons):
+        ax.scatter(sm_lons, sm_lats, c='DarkBlue', marker='.', s=3, transform=gplot.base_projection)
+
+    ax.scatter(fz_lons, fz_lats,   c='yellow', transform=gplot.base_projection)
+    ax.scatter(LIP_lons, LIP_lats, c='magenta', transform=gplot.base_projection)
+    ax.scatter(sz_lons, sz_lats,   c='cyan', transform=gplot.base_projection)
 
     gplot.plot_trenches(ax, color='k', zorder=9)
     gplot.plot_subduction_teeth(ax, color='k', zorder=10)
@@ -195,10 +291,11 @@ def plot_fz_timseries(time):
             
             # print(len(size), np.count_nonzero(mask_ages), df.shape)
 
-            sc = ax.scatter(rlons[mask_ages], rlats[mask_ages], s=10+size[mask_ages]*2, 
-                            marker=symbols[i], cmap='YlGnBu',
+            sc = ax.scatter(rlons[mask_ages], rlats[mask_ages],
+                            s=10+size[mask_ages]*2, 
+                            marker=symbols[i],
                             color='C{}'.format(i),
-                            label=label, transform=ccrs.PlateCarree(),
+                            label=label, transform=gplot.base_projection,
                             edgecolor='k', linewidth=0.5, zorder=11)
             
         # create legend elements
@@ -222,17 +319,13 @@ from joblib import Parallel, delayed
 
 
 if __name__ == "__main__":
-    _ = Parallel(n_jobs=-3, backend='multiprocessing', verbose=1)(delayed(plot_fz_timseries) (time,) for time in reconstruction_times)
+    _ = Parallel(n_jobs=-3, backend='multiprocessing', verbose=1)(delayed(plot_timseries) (time,) for time in reconstruction_times)
 
+
+# plot_timseries(145)
 
 # Create a video using this command:
 # 
 # ```sh
 # cat $(ls -r snapshots/slab_depth_*) | ffmpeg -y -f image2pipe -r 8 -i - -c:v h264_videotoolbox -b:v 6000k slab_dip_clennett_v4_no_plateaus.mp4
 # ```
-
-# In[ ]:
-
-
-
-
