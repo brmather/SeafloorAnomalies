@@ -20,6 +20,8 @@ Workflows to interrogate the relationships between subducting seafloor anomalies
 
 The `data` folder contains input GPlates data on large igneous provinces (LIPs), seamount chains, and the Hoggard _et al._ (2020), Nat. Geo. dataset of porphyry copper deposits.
 
+Additional data, including outputs from these Jupyter notebook workflows, can be obtained from Zenodo: [https://doi.org/10.5281/zenodo.10851354](https://doi.org/10.5281/zenodo.10851354).
+
 #### References
 
 Hoggard, M. J., Czarnota, K., Richards, F. D., Huston, D. L., Jaques, A. L., & Ghelichkhan, S. (2020). Global distribution of sediment-hosted metals controlled by craton edge stability. Nature Geoscience, (May). https://doi.org/10.31223/osf.io/2kjvc
